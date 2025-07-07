@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 import logging
 import aiohttp 
 import requests 
+import base64
 
 from .utils.protobuf_utils import encode_uid, decode_info, create_protobuf 
 from .utils.crypto_utils import encrypt_aes
@@ -13,8 +14,10 @@ logger = logging.getLogger(__name__)
 
 like_bp = Blueprint('like_bp', __name__)
 
+
 _SERVERS = {}
 _token_cache = None
+
 
 async def async_post_request(url: str, data: bytes, token: str):
     try:
@@ -40,8 +43,8 @@ def make_request(uid_enc: str, url: str, token: str):
         return None
 
 async def detect_player_region(uid: str):
-    for region_key, server_url in _SERVERS.items():
-        tokens = _token_cache.get_tokens(region_key)
+    for region_key, server_url in _SERVERS.items(): # Utilisez _SERVERS
+        tokens = _token_cache.get_tokens(region_key) # Utilisez _token_cache
         if not tokens:
             continue
 
@@ -54,8 +57,8 @@ async def detect_player_region(uid: str):
     return None, None
 
 async def send_likes(uid: str, region: str):
-    tokens = _token_cache.get_tokens(region)
-    like_url = f"{_SERVERS[region]}/LikeProfile"
+    tokens = _token_cache.get_tokens(region) # Utilisez _token_cache
+    like_url = f"{_SERVERS[region]}/LikeProfile" # Utilisez _SERVERS
     encrypted = encrypt_aes(create_protobuf(uid, region))
 
     tasks = [async_post_request(like_url, bytes.fromhex(encrypted), token) for token in tokens]
@@ -93,7 +96,7 @@ async def like_player():
 
         await send_likes(uid, region)
 
-        current_tokens = _token_cache.get_tokens(region)
+        current_tokens = _token_cache.get_tokens(region) 
         if not current_tokens:
             logger.error(f"No tokens available for {region} to verify likes after sending.")
             after_likes = before_likes
@@ -121,8 +124,8 @@ async def like_player():
             "credits": "https://t.me/nopethug"
         }), 500
 
-@like_bp.route("/account", methods=["GET"])
-async def get_player_info():
+@like_bp.route("/player", methods=["GET"])
+async def get_raw_player_info():
     try:
         uid = request.args.get("uid")
         if not uid or not uid.isdigit():
@@ -133,8 +136,9 @@ async def get_player_info():
                 "credits": "https://t.me/nopethug"
             }), 400
 
-        region, player_info = await detect_player_region(uid)
-        if not player_info:
+        # Find player region first
+        region, _ = await detect_player_region(uid)
+        if not region:
             return jsonify({
                 "error": "Player not found",
                 "message": "Player not found on any server",
@@ -142,24 +146,49 @@ async def get_player_info():
                 "credits": "https://t.me/nopethug"
             }), 404
 
-        account_info = player_info.AccountInfo
+        # Make direct request to the server
+        info_url = f"{_SERVERS[region]}/GetPlayerPersonalShow"
+        tokens = _token_cache.get_tokens(region)
+        if not tokens:
+            return jsonify({
+                "error": "Service unavailable",
+                "message": "No valid tokens for this region",
+                "status": 503,
+                "credits": "https://t.me/nopethug"
+            }), 503
+
+        # Get raw response
+        raw_response = await async_post_request(
+            response,
+
+        if not raw_response:
+            return jsonify({
+                "error": "Empty response",
+                "message": "Server returned empty response",
+                "status": 502,
+                "credits": "https://t.me/nopethug"
+            }), 502
+
+        # Return the raw response in multiple formats
         return jsonify({
-            "player": {
-                "uid": uid,
-                "nickname": account_info.PlayerNickname,
-                "level": account_info.PlayerLevel,
-                "likes": account_info.Likes,
-                "experience": account_info.PlayerExp,
-                "vip_level": account_info.VipLevel,
-                "guild_name": account_info.GuildName if hasattr(account_info, 'GuildName') else None,
-                "server_region": region
-            },
             "status": "success",
+            "server_region": region,
+            "formats": {
+                "hex": raw_response.hex(),
+                "base64": base64.b64encode(raw_response).decode('utf-8'),
+                "bytes_length": len(raw_response)
+            },
+            "decoded": decode_info(raw_response).__dict__ if raw_response else None,
+            "metadata": {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "server": _SERVERS[region],
+                "token_used": tokens[0][:8] + "..." + tokens[0][-4:] if tokens else None
+            },
             "credits": "https://t.me/nopethug"
         })
 
     except Exception as e:
-        logger.error(f"Get player info error for UID {uid}: {str(e)}", exc_info=True)
+        logger.error(f"Failed to get raw player info: {str(e)}", exc_info=True)
         return jsonify({
             "error": "Internal server error",
             "message": str(e),
@@ -191,13 +220,11 @@ def health_check():
 
 @like_bp.route("/", methods=["GET"]) 
 async def root_home():
+    """
+    Route pour la page d'accueil principale de l'API (accessible via '/').
+    """
     return jsonify({
         "message": "Api free fire like ",
-        "endpoints": {
-            "/like?uid=PLAYER_UID": "Add likes to player",
-            "/account?uid=PLAYER_UID": "Get player information",
-            "/health-check": "Check service status"
-        },
         "credits": "https://t.me/nopethug",
     })
 
