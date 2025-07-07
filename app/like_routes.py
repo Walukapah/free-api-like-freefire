@@ -52,6 +52,7 @@ async def detect_player_region(uid: str):
         info_url = f"{server_url}/GetPlayerPersonalShow"
         response = await async_post_request(info_url, bytes.fromhex(encode_uid(uid)), tokens[0])
         if response:
+            logger.info(f"Raw Response (hex): {response.hex()}")
             player_info = decode_info(response)
             if player_info and player_info.AccountInfo.PlayerNickname:
                 return region_key, player_info
