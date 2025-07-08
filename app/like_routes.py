@@ -1,10 +1,11 @@
+
 from flask import Blueprint, request, jsonify
 import asyncio
 from datetime import datetime, timezone
 import logging
 import aiohttp 
 import requests 
-import base64
+
 
 from .utils.protobuf_utils import encode_uid, decode_info, create_protobuf 
 from .utils.crypto_utils import encrypt_aes
@@ -51,6 +52,7 @@ async def detect_player_region(uid: str):
         info_url = f"{server_url}/GetPlayerPersonalShow"
         response = await async_post_request(info_url, bytes.fromhex(encode_uid(uid)), tokens[0])
         if response:
+            logger.info(f"Raw Response (hex): {response.hex}")
             player_info = decode_info(response)
             if player_info and player_info.AccountInfo.PlayerNickname:
                 return region_key, player_info
@@ -117,78 +119,6 @@ async def like_player():
 
     except Exception as e:
         logger.error(f"Like error for UID {uid}: {str(e)}", exc_info=True)
-        return jsonify({
-            "error": "Internal server error",
-            "message": str(e),
-            "status": 500,
-            "credits": "https://t.me/nopethug"
-        }), 500
-
-@like_bp.route("/player", methods=["GET"])
-async def get_raw_player_info():
-    try:
-        uid = request.args.get("uid")
-        if not uid or not uid.isdigit():
-            return jsonify({
-                "error": "Invalid UID",
-                "message": "Valid numeric UID required",
-                "status": 400,
-                "credits": "https://t.me/nopethug"
-            }), 400
-
-        # Find player region first
-        region, _ = await detect_player_region(uid)
-        if not region:
-            return jsonify({
-                "error": "Player not found",
-                "message": "Player not found on any server",
-                "status": 404,
-                "credits": "https://t.me/nopethug"
-            }), 404
-
-        # Make direct request to the server
-        info_url = f"{_SERVERS[region]}/GetPlayerPersonalShow"
-        tokens = _token_cache.get_tokens(region)
-        if not tokens:
-            return jsonify({
-                "error": "Service unavailable",
-                "message": "No valid tokens for this region",
-                "status": 503,
-                "credits": "https://t.me/nopethug"
-            }), 503
-
-        # Get raw response
-        raw_response = await async_post_request(
-            response,
-
-        if not raw_response:
-            return jsonify({
-                "error": "Empty response",
-                "message": "Server returned empty response",
-                "status": 502,
-                "credits": "https://t.me/nopethug"
-            }), 502
-
-        # Return the raw response in multiple formats
-        return jsonify({
-            "status": "success",
-            "server_region": region,
-            "formats": {
-                "hex": raw_response.hex(),
-                "base64": base64.b64encode(raw_response).decode('utf-8'),
-                "bytes_length": len(raw_response)
-            },
-            "decoded": decode_info(raw_response).__dict__ if raw_response else None,
-            "metadata": {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "server": _SERVERS[region],
-                "token_used": tokens[0][:8] + "..." + tokens[0][-4:] if tokens else None
-            },
-            "credits": "https://t.me/nopethug"
-        })
-
-    except Exception as e:
-        logger.error(f"Failed to get raw player info: {str(e)}", exc_info=True)
         return jsonify({
             "error": "Internal server error",
             "message": str(e),
